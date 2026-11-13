@@ -2,10 +2,8 @@
   // Run Fileverse in GitHub Codespaces: Code → Codespaces → Create codespace on main.
   // Fileverse starts by itself and opens in a new browser tab (port 8080).
   "name": "Fileverse",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
-  },
+  // GitHub's standard Codespaces image: Docker is built in and it's pre-cached, so it starts fast.
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
   "hostRequirements": { "cpus": 2, "memory": "8gb", "storage": "32gb" },
   "forwardPorts": [8080],
   "portsAttributes": {
