@@ -1,0 +1,82 @@
+# Builds the Fileverse image on GitHub's servers, checks it starts, publishes it for Codespaces
+# (ghcr.io/<owner>/fileverse:latest), then runs the full conversion test suite against it.
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/fileverse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: fileverse:test
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start and health check
+        run: |
+          docker run -d --name fv -p 8080:8080 -e HEAVY_CONCURRENCY=2 -e LIGHT_CONCURRENCY=4 fileverse:test
+          for i in $(seq 60); do curl -fsS http://127.0.0.1:8080/api/health && break; sleep 2; done
+          curl -fsS http://127.0.0.1:8080/api/health
+          curl -fsS http://127.0.0.1:8080/ | grep -qi '<div id="root"'
+
+      - name: Publish for Codespaces
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          OWNER_LC=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          docker tag fileverse:test "$OWNER_LC:latest"
+          docker tag fileverse:test "$OWNER_LC:${GITHUB_SHA::7}"
+          docker push "$OWNER_LC:latest"
+          docker push "$OWNER_LC:${GITHUB_SHA::7}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install test client
+        working-directory: server
+        run: npm ci --no-audit --no-fund
+
+      - name: Conversion tests (every route, end-to-end, quality)
+        run: |
+          docker run --rm --network host --user root -v "$GITHUB_WORKSPACE:/repo" -w /repo/server \
+            --entrypoint bash fileverse:test -c '
+              set -e
+              bash test/make-fixtures.sh
+              node test/matrix.mjs  --base http://127.0.0.1:8080
+              node test/e2e.mjs     --base http://127.0.0.1:8080
+              node test/quality.mjs --base http://127.0.0.1:8080'
+
+      - name: Server log
+        if: always()
+        run: docker logs --tail 200 fv || true
