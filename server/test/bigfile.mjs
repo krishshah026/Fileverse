@@ -1,0 +1,25 @@
+// Large-file test: resumable chunked upload of a multi-GB video, remux, verified download.
+import fs from 'node:fs';
+import { Client } from './client.mjs';
+import { probeMedia } from '../src/detect/inspect.js';
+const [,, base, file, target = 'mp4'] = process.argv;
+const c = new Client(base);
+const size = fs.statSync(file).size;
+let t = Date.now();
+let last = 0;
+const info = await c.upload(file, { onProgress: (sent) => { if (Date.now() - last > 10000) { last = Date.now(); console.log(`  upload ${(sent / size * 100).toFixed(0)}%`); } } });
+const upSec = (Date.now() - t) / 1000;
+console.log(`uploaded ${(size / 1e9).toFixed(2)} GB in ${upSec.toFixed(0)}s (${(size / 1e6 / upSec).toFixed(0)} MB/s); detected ${info.format}, ${info.info.duration?.toFixed(0)}s, ${info.info.width}x${info.info.height}`);
+const target0 = info.targets.find((x) => x.to === target);
+console.log(`quality: ${target0.quality.level} — ${target0.quality.message}`);
+t = Date.now();
+const job = await c.createJob({ inputs: [info.id], target });
+const [done] = await c.waitFor([job.id], { onUpdate: (j) => { if (Date.now() - last > 5000) { last = Date.now(); console.log(`  ${j.status} ${(j.progress * 100).toFixed(0)}% eta=${j.eta ?? '-'}s`); } } });
+console.log(`job ${done.status} in ${((Date.now() - t) / 1000).toFixed(1)}s; output ${(done.outputs[0]?.size / 1e9).toFixed(2)} GB; notes: ${done.notes.join(' ')}`);
+t = Date.now();
+const dest = (await import('node:path')).join((await import('node:os')).tmpdir(), 'fileverse-bigfile-download.' + target);
+await c.download(done.id, 0, dest);
+const dSec = (Date.now() - t) / 1000;
+const m = await probeMedia(dest);
+console.log(`downloaded ${(fs.statSync(dest).size / 1e9).toFixed(2)} GB in ${dSec.toFixed(0)}s; duration ${m.duration.toFixed(1)}s; streams ${m.streams.map((s) => s.codec).join(',')}`);
+fs.rmSync(dest);
