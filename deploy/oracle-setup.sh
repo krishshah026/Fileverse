@@ -4,13 +4,20 @@
 #
 #  Paste this whole file into the "Initialization script" box when you create the
 #  instance (Advanced options → Management → Paste cloud-init script).
-#  Change ONLY the three values below. Everything else happens automatically
+#  Fill in EITHER option A (your own domain, e.g. managed in Cloudflare DNS)
+#  OR option B (free DuckDNS address). Everything else happens automatically
 #  (about 25–35 minutes after the server starts).
 # =====================================================================================
 
+# Option A — your own domain (leave empty to use DuckDNS). Example: convert.example.com
+# In Cloudflare DNS add an "A" record for it pointing to this server's Public IP, Proxy status: "DNS only" (grey cloud).
+CUSTOM_DOMAIN=""
+
+# Option B — free DuckDNS address (used only when CUSTOM_DOMAIN is empty)
 DUCKDNS_SUBDOMAIN="your-subdomain"          # e.g. fileverse-kshitij   (without .duckdns.org)
 DUCKDNS_TOKEN="your-duckdns-token"          # copy it from the top of duckdns.org after signing in
-GITHUB_REPO="https://github.com/your-username/fileverse.git"
+
+GITHUB_REPO="https://github.com/krishshah026/Fileverse.git"
 
 # ------------------------------- nothing to change below -------------------------------
 set -uo pipefail
@@ -22,15 +29,21 @@ echo "== Fileverse setup started: $(date)"
 iptables -I INPUT 1 -p tcp -m state --state NEW -m multiport --dports 80,443 -j ACCEPT
 netfilter-persistent save 2>/dev/null || true
 
-# 2. Point yoursubdomain.duckdns.org at this server, and keep it pointed (every 5 minutes).
-DUCK_URL="https://www.duckdns.org/update?domains=${DUCKDNS_SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip="
-for i in 1 2 3 4 5; do
-  RESULT=$(curl -fsS "$DUCK_URL" || true)
-  [ "$RESULT" = "OK" ] && break
-  sleep 10
-done
-echo "DuckDNS update: ${RESULT:-no answer}  (OK = success, KO = wrong subdomain or token)"
-echo "*/5 * * * * root curl -fsS '${DUCK_URL}' >/dev/null 2>&1" > /etc/cron.d/duckdns
+# 2. Work out the site address. With DuckDNS, point it at this server and keep it pointed.
+if [ -n "$CUSTOM_DOMAIN" ]; then
+  SITE_DOMAIN="$CUSTOM_DOMAIN"
+  echo "Using your own domain: $SITE_DOMAIN (make sure its DNS A record points to this server)"
+else
+  SITE_DOMAIN="${DUCKDNS_SUBDOMAIN}.duckdns.org"
+  DUCK_URL="https://www.duckdns.org/update?domains=${DUCKDNS_SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip="
+  for i in 1 2 3 4 5; do
+    RESULT=$(curl -fsS "$DUCK_URL" || true)
+    [ "$RESULT" = "OK" ] && break
+    sleep 10
+  done
+  echo "DuckDNS update: ${RESULT:-no answer}  (OK = success, KO = wrong subdomain or token)"
+  echo "*/5 * * * * root curl -fsS '${DUCK_URL}' >/dev/null 2>&1" > /etc/cron.d/duckdns
+fi
 
 # 3. Install Docker and git.
 export DEBIAN_FRONTEND=noninteractive
@@ -44,7 +57,7 @@ rm -rf /opt/fileverse
 git clone --depth 1 "$GITHUB_REPO" /opt/fileverse
 cd /opt/fileverse
 cat > .env <<ENV
-DOMAIN=${DUCKDNS_SUBDOMAIN}.duckdns.org
+DOMAIN=${SITE_DOMAIN}
 HEAVY_CONCURRENCY=1
 LIGHT_CONCURRENCY=2
 DISK_RESERVE_MB=8192
@@ -60,4 +73,4 @@ UPD
 chmod +x /usr/local/bin/fileverse-update
 
 echo "== Fileverse setup finished: $(date)"
-echo "== Open https://${DUCKDNS_SUBDOMAIN}.duckdns.org"
+echo "== Open https://${SITE_DOMAIN}"
